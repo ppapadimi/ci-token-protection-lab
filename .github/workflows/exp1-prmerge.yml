@@ -39,12 +39,7 @@ jobs:
           printf '{"title":"exp1G %s","head":"%s","base":"master","body":"lab"}' "$GITHUB_RUN_ID" "$BR" > pr.json
           curl -sS "${H[@]}" -w '\nHTTP_STATUS=%{http_code}\n' -X POST --data-binary @pr.json "$API/pulls" > pr-resp.txt
           head -c 400 pr-resp.txt; echo
-          N=$(python3 -c "import json;print(json.load(open('pr-resp.txt'.replace('x','x')))['number'])" 2>/dev/null || \
-              python3 -c "
-import json,re
-t=open('pr-resp.txt').read()
-t=t[:t.rfind('HTTP_STATUS')]
-print(json.loads(t).get('number',''))")
+          N=$(python3 -c "import json;t=open('pr-resp.txt').read();t=t[:t.rfind('HTTP_STATUS')];print(json.loads(t).get('number',''))")
           echo "PR_NUMBER=$N"
 
           echo "--- 2. approve it with the same token ---"
@@ -52,8 +47,7 @@ print(json.loads(t).get('number',''))")
           curl -sS "${H[@]}" -w '\nHTTP_STATUS=%{http_code}\n' -X POST --data-binary @rev.json "$API/pulls/$N/reviews" | head -c 600; echo
 
           echo "--- 3. self-certify the required contexts ---"
-          CTXS=$(curl -sS "${H[@]}" "$API/../../repos/${GITHUB_REPOSITORY}/branches/master" 2>/dev/null | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))' 2>/dev/null)
-          [ -z "$CTXS" ] && CTXS=$(curl -sS "${H[@]}" "$API/branches/master" | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))')
+          CTXS=$(curl -sS "${H[@]}" "$API/branches/master" | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))')
           echo "REQUIRED_CONTEXTS: $CTXS"
           for ctx in $CTXS; do
             printf '{"state":"success","context":"%s","description":"self-certified"}' "$ctx" > st.json
