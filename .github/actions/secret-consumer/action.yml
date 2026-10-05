@@ -1,0 +1,9 @@
+name: 'secret-consumer'
+description: 'Local stand-in for a third-party action that is handed a project token.'
+inputs:
+  projectToken:
+    description: 'project token'
+    required: true
+runs:
+  using: 'node20'
+  main: 'index.js'

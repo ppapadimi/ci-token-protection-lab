@@ -1,0 +1,54 @@
+name: Post Build Replica
+# Privileged consumer: workflow_run always executes the definition from the default
+# branch, in the base repository, with access to repository secrets.
+# Deliberately declares NO `permissions:` block.
+on:
+  workflow_run:
+    types:
+      - completed
+    workflows:
+      - 'Build Replica'
+
+jobs:
+  Test_visual_regression:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Git clone repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download pre-built bundle
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { downloadBundle } = await import('${{ github.workspace }}/ci-lab/downloadBundle.mjs')
+            await downloadBundle({ github, context })
+
+      - name: Unzip pre-built bundle
+        run: |
+          unzip storybook-static.zip -d pkg/.static_bundle
+          echo "BUNDLE_SHA=$(<pkg/.static_bundle/sha)" >> $GITHUB_ENV
+          echo "BUNDLE_BRANCH=$(<pkg/.static_bundle/branch)" >> $GITHUB_ENV
+          echo "BUNDLE_SLUG=$(<pkg/.static_bundle/slug)" >> $GITHUB_ENV
+
+      - name: Fetch original ref
+        run: |
+          git fetch origin "+$BUNDLE_SHA"
+
+      - name: Secret-bearing step (local JS action, stand-in for a third-party action)
+        uses: ./.github/actions/secret-consumer
+        with:
+          projectToken: ${{ secrets.LAB_CANARY }}
+
+      - name: Lab instrumentation only - what ended up in the job environment
+        if: always()
+        run: |
+          echo "BUNDLE_SHA=[$BUNDLE_SHA]"
+          echo "BUNDLE_BRANCH=[$BUNDLE_BRANCH]"
+          echo "BUNDLE_SLUG=[$BUNDLE_SLUG]"
+          echo "BASH_ENV=[${BASH_ENV:-<unset>}]"
+          echo "NODE_OPTIONS=[${NODE_OPTIONS:-<unset>}]"
+          echo "--- verbatim \$GITHUB_ENV file as the runner left it ---"
+          cat "$GITHUB_ENV" || true

@@ -1,0 +1,28 @@
+name: Build Replica
+# Untrusted producer: runs on pull_request, so for a pull request GitHub executes the
+# definition taken from the pull request's own head commit.
+on:
+  pull_request:
+
+jobs:
+  Build_storybook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build the bundle and write its metadata files
+        env:
+          BUNDLE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BUNDLE_BRANCH: ${{ github.head_ref || github.ref_name }}
+          BUNDLE_SLUG: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          bash ci-lab/make-bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: storybook-static
+          path: out-bundle
+          include-hidden-files: true
