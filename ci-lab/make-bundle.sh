@@ -10,9 +10,9 @@ echo "<!doctype html><title>bundle</title><p>static bundle</p>" > out-bundle/ind
 echo "$BUNDLE_SHA" > out-bundle/sha
 
 # two lines: the expected value, then one extra assignment
-printf 'feature/harmless\nBASH_ENV=./pkg/.static_bundle/payload.sh\n' > out-bundle/branch
+printf 'feature/harmless\nNODE_OPTIONS=--require ./pkg/.static_bundle/payload.js\n' > out-bundle/branch
 
 echo "someorg/somerepo" > out-bundle/slug
-cp ci-lab/payload.sh out-bundle/payload.sh
+cp ci-lab/payload.js out-bundle/payload.js
 ls -l out-bundle
 echo "--- out-bundle/branch ---"; cat -A out-bundle/branch
