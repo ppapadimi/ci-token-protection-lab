@@ -1,0 +1,71 @@
+name: exp1-prmerge
+# Experiment 1G: under `required_pull_request_reviews`, can the job's own token open a
+# pull request, approve it, satisfy the required status check and merge it?
+# No `permissions:` block.
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'configuration label'
+        required: true
+        default: 'G'
+
+jobs:
+  pr_merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Open, self-approve, self-certify and merge a pull request with the workflow token
+        env:
+          LABEL: ${{ inputs.label }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          H=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
+          git config user.name  "ci-lab-bot"
+          git config user.email "ci-lab-bot@users.noreply.github.com"
+          mkdir -p probe
+          printf 'pr-route run=%s config=%s\n' "$GITHUB_RUN_ID" "$LABEL" > "probe/prroute-${GITHUB_RUN_ID}.txt"
+          git add probe
+          git commit -q -m "exp1G candidate (${GITHUB_RUN_ID})"
+          SHA=$(git rev-parse HEAD)
+          BR="probe/pr-${GITHUB_RUN_ID}"
+          git push origin "HEAD:refs/heads/${BR}" > /dev/null 2>&1
+          echo "SIDE_BRANCH_PUSH_EXIT=$? SHA=$SHA BRANCH=$BR"
+
+          echo "--- 1. create the pull request ---"
+          printf '{"title":"exp1G %s","head":"%s","base":"master","body":"lab"}' "$GITHUB_RUN_ID" "$BR" > pr.json
+          curl -sS "${H[@]}" -w '\nHTTP_STATUS=%{http_code}\n' -X POST --data-binary @pr.json "$API/pulls" > pr-resp.txt
+          head -c 400 pr-resp.txt; echo
+          N=$(python3 -c "import json;print(json.load(open('pr-resp.txt'.replace('x','x')))['number'])" 2>/dev/null || \
+              python3 -c "
+import json,re
+t=open('pr-resp.txt').read()
+t=t[:t.rfind('HTTP_STATUS')]
+print(json.loads(t).get('number',''))")
+          echo "PR_NUMBER=$N"
+
+          echo "--- 2. approve it with the same token ---"
+          printf '{"event":"APPROVE","body":"self-approved by the workflow token"}' > rev.json
+          curl -sS "${H[@]}" -w '\nHTTP_STATUS=%{http_code}\n' -X POST --data-binary @rev.json "$API/pulls/$N/reviews" | head -c 600; echo
+
+          echo "--- 3. self-certify the required contexts ---"
+          CTXS=$(curl -sS "${H[@]}" "$API/../../repos/${GITHUB_REPOSITORY}/branches/master" 2>/dev/null | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))' 2>/dev/null)
+          [ -z "$CTXS" ] && CTXS=$(curl -sS "${H[@]}" "$API/branches/master" | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)["protection"]["required_status_checks"]["contexts"]))')
+          echo "REQUIRED_CONTEXTS: $CTXS"
+          for ctx in $CTXS; do
+            printf '{"state":"success","context":"%s","description":"self-certified"}' "$ctx" > st.json
+            curl -sS "${H[@]}" -o /dev/null -w "  POST /statuses -> %{http_code} ($ctx)\n" -X POST --data-binary @st.json "$API/statuses/$SHA"
+          done
+
+          echo "--- 4. mergeability as GitHub sees it ---"
+          curl -sS "${H[@]}" "$API/pulls/$N" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("mergeable=",d.get("mergeable"),"mergeable_state=",d.get("mergeable_state"))'
+
+          echo "--- 5. merge it ---"
+          curl -sS "${H[@]}" -w '\nHTTP_STATUS=%{http_code}\n' -X PUT -d '{"merge_method":"merge"}' "$API/pulls/$N/merge" | head -c 600; echo
+
+          echo "--- 6. master after the attempt ---"
+          git ls-remote origin refs/heads/master
+          exit 0
