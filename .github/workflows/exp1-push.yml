@@ -1,0 +1,64 @@
+name: exp1-push
+# Experiment 1: can the automatic GITHUB_TOKEN land a commit on a protected default branch?
+# NOTE: deliberately declares no `permissions:` block, so the job inherits the
+# repository default workflow permission.
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: 'configuration label (A/B/C/D/A-enforce-admins)'
+        required: true
+        default: 'X'
+
+jobs:
+  attempt_push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (persist-credentials defaults to true)
+        uses: actions/checkout@v4
+
+      - name: Confirm the checkout credential is persisted (value redacted)
+        run: |
+          git config --local --list | sed -E 's/(extraheader=AUTHORIZATION: basic ).*/\1<REDACTED>/I'
+
+      - name: Attempt direct git push to master with the automatic GITHUB_TOKEN
+        env:
+          LABEL: ${{ inputs.label }}
+        run: |
+          set +e
+          git config user.name  "ci-lab-bot"
+          git config user.email "ci-lab-bot@users.noreply.github.com"
+          mkdir -p probe
+          printf 'run=%s config=%s at=%s\n' "$GITHUB_RUN_ID" "$LABEL" "$(date -u +%FT%TZ)" \
+            > "probe/marker-${LABEL}-${GITHUB_RUN_ID}.txt"
+          git add probe
+          git commit -q -m "exp1 push attempt (${LABEL})"
+          git push origin HEAD:master > push-out.txt 2>&1
+          rc=$?
+          echo "=== BEGIN VERBATIM GIT PUSH OUTPUT (config ${LABEL}) ==="
+          cat push-out.txt
+          echo "=== END VERBATIM GIT PUSH OUTPUT ==="
+          echo "PUSH_EXIT_STATUS=${rc}"
+          echo "LOCAL_HEAD=$(git rev-parse HEAD)"
+          echo "=== remote refs/heads/master after the attempt ==="
+          git ls-remote origin refs/heads/master
+          exit 0
+
+      - name: Attempt the same write through the REST Contents API with the same token
+        env:
+          LABEL: ${{ inputs.label }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          B64=$(printf 'api write attempt config=%s run=%s\n' "$LABEL" "$GITHUB_RUN_ID" | base64 -w0)
+          printf '{"message":"exp1 api write (%s)","content":"%s","branch":"master","path":"probe/api-%s-%s.txt"}\n' \
+            "$LABEL" "$B64" "$LABEL" "$GITHUB_RUN_ID" > body.json
+          echo "=== BEGIN VERBATIM REST API RESPONSE (config ${LABEL}) ==="
+          curl -sS -w '\nHTTP_STATUS=%{http_code}\n' -X PUT \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary @body.json \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/contents/probe/api-${LABEL}-${GITHUB_RUN_ID}.txt"
+          echo "=== END VERBATIM REST API RESPONSE ==="
+          exit 0
